@@ -10,7 +10,7 @@ import struct
 def dns_query(type, name, server):
     # Create a UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    server_address = (server, ????) # Enter Port Number
+    server_address = (server, 53)  # DNS uses well-known port 53
 
     # Create the DNS query
     ID = 0x1234
@@ -37,7 +37,7 @@ def dns_query(type, name, server):
 
         # DNS Header Format (12 bytes / 96 bits)
         #
-        # 0	 1	2  3  4  5	6  7  8  9 10 11 12 13 14 15
+        # 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
         # +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
         # |                      MessageID                 |
         # +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
@@ -54,14 +54,14 @@ def dns_query(type, name, server):
 
 
         # Message ID: 16 bits
-        # QR (Query/Response): 1 bit
-        # Opcode: 4 bits
-        # AA (Authoritative Answer): 1 bit
-        # TC (Truncated): 1 bit
-        # RD (Recursion Desired): 1 bit
-        # RA (Recursion Available): 1 bit
-        # Z: 3 bits
-        # Rcode (Response Code): 4 bits
+        # QR (Query/Response): 1 bit        -> bit 15
+        # Opcode: 4 bits                    -> bits 14-11
+        # AA (Authoritative Answer): 1 bit  -> bit 10
+        # TC (Truncated): 1 bit             -> bit 9
+        # RD (Recursion Desired): 1 bit     -> bit 8
+        # RA (Recursion Available): 1 bit   -> bit 7
+        # Z: 3 bits                         -> bits 6-4
+        # Rcode (Response Code): 4 bits     -> bits 3-0
         # QDCount (Question Count): 16 bits
         # ANCount (Answer Count): 16 bits
         # NSCount (Authority Count): 16 bits
@@ -69,7 +69,9 @@ def dns_query(type, name, server):
         
         # Example: The QR field is located in the second byte of the DNS header, with its most significant bit being the leftmost bit of this byte. Since each byte contains 8 bits, shifting the value of the QR field left by 15 bits moves it to the correct position in the 16-bit value that represents the combination of several fields in the DNS header.
 
-    header = struct.pack('!HHHHHH', ID, QR << 15 | OPCODE << ?? | AA << ?? | TC << ?? | RD << ??| RA << ?? | Z << ?? | RCODE, QDCOUNT, ANCOUNT, NSCOUNT, ARCOUNT)
+    header = struct.pack('!HHHHHH', ID,
+                         QR << 15 | OPCODE << 11 | AA << 10 | TC << 9 | RD << 8 | RA << 7 | Z << 4 | RCODE,
+                         QDCOUNT, ANCOUNT, NSCOUNT, ARCOUNT)
 
     # Encode the QNAME
     
@@ -80,45 +82,45 @@ def dns_query(type, name, server):
         # 2. nyu (length of 3)
         # 3. edu (length of 3)
         
-    qname_parts = name.split('????') # How can we easily split the string?
-    qname_encoded_parts = [struct.pack('B', len(part)) + part.encode('????') for part in qname_parts] # Make sure it's encoded as a sequence of the right character encoding type (lowercase)
-    qname_encoded = b''.join(qname_encoded_parts) + b'\x??' #enter the closing byte value to signify the end of the domain string (two digits)
+    qname_parts = name.split('.')  # Split on '.' to separate each label
+    qname_encoded_parts = [struct.pack('B', len(part)) + part.encode('ascii') for part in qname_parts]
+    qname_encoded = b''.join(qname_encoded_parts) + b'\x00'  # 0x00 byte terminates the QNAME
 
     # Encode the QTYPE and QCLASS
+    # RFC 1035 Section 3.2.2 — Type values:
+    #   A    = 1  (IPv4 host address)
+    #   AAAA = 28 (IPv6 host address, RFC 3596)
 
     if type == 'A':
-        qtype = ?????     # Lookup the Resource Record value
+        qtype = 1       # A record — IPv4
     elif type == 'AAAA':
-        qtype = ?????     # Lookup the Resource Record value
+        qtype = 28      # AAAA record — IPv6
     else:
         raise ValueError('Invalid type')
-    
 
-    qclass = ??     # Lookup the Resource Record class being requested
+    qclass = 1  # IN (Internet) class — RFC 1035 Section 3.2.4
 
         # This is the query we are asking the DNS Server
     question = qname_encoded + struct.pack('!HH', qtype, qclass)
 
-    # Send the query to the server, remember we must always include our header alongside the question!
-    message = ???? + ????
+    # Send the query to the server — header + question must be sent together
+    message = header + question
     sent = sock.sendto(message, server_address)
 
     # Receive the response from the server
-    data, _ = sock.recvfrom(4096) # This is the buffer size we have selected, 4096 Bytes is the maximum amount of data to be received at once.
-    
-        # A larger buffer size would allow more data to be received at once, while a smaller buffer size would limit the amount of data that can be received at once. 
-        # It is a good idea to choose a buffer size that is large enough to accommodate the largest expected DNS response, but not so large that it wastes memory.
-    
+    data, _ = sock.recvfrom(4096)  # Buffer size: 4096 bytes (ample for any DNS reply)
+
     # Parse the response header
-    response_header = data[:?????] # What is the size of the DNS response header in bytes? 
-    ID, FLAGS, QDCOUNT, ANCOUNT, NSCOUNT, ARCOUNT = struct.unpack('!HHHHHH', response_header) # We are unpacking the binary data of the response header into individual values representing the fields of the DNS header.
-    
+    response_header = data[:12]  # DNS header is always exactly 12 bytes
+    ID, FLAGS, QDCOUNT, ANCOUNT, NSCOUNT, ARCOUNT = struct.unpack('!HHHHHH', response_header)
+
     # Parse the response question section (same as query)
-    response_question = data[??:??+len(????)] # The data variable starts immediately after the header section, so what is it's index? Note the two '??' '??' will be the same value as we start at a specific index and then go for the entire length of the binary data received. 
+    # Question section starts immediately after the 12-byte header
+    response_question = data[12:12+len(question)]
     assert response_question == question
 
-    # Parse the response answer section
-    response_answer = data[??+len(question):] # We would be looking at the same index position as before (after the header)
+    # Parse the response answer section — starts right after header + question
+    response_answer = data[12+len(question):]
     offset = 0
     for _ in range(ANCOUNT):
         # Parse the name
@@ -132,7 +134,7 @@ def dns_query(type, name, server):
                 # Pointer
                 pointer = struct.unpack('!H', response_answer[offset-1:offset+1])[0] & 0x3fff
                 offset += 1
-                name_parts.append(parse_name(data, pointer)) # For those curious, parse_name() parses the rest of the domain name, and we append the result to the name_parts list.
+                name_parts.append(parse_name(data, pointer))
                 break
             else:
                 # Label
@@ -142,24 +144,22 @@ def dns_query(type, name, server):
         name = '.'.join(name_parts)
 
         # Parse the type, class, TTL, and RDLENGTH
-        type, cls, ttl, rdlength = struct.unpack('!HHIH', response_answer[offset:offset+????]) # What is the offset value in bytes? Remember 'H' represent 2 bytes, and 'I' represents 4 bytes, we declared '!HHIH'. 
-        
-        offset += ???? # Same value as just calculated
+        # '!HHIH': H=2, H=2, I=4, H=2 -> total 10 bytes
+        type, cls, ttl, rdlength = struct.unpack('!HHIH', response_answer[offset:offset+10])
+        offset += 10  # Advance by the 10 bytes just read
 
         # Parse the RDATA
         rdata = response_answer[offset:offset+rdlength]
         offset += rdlength
 
-        if type == ?????: # Lookup Type value
-            # A record (IPv4 address)
+        if type == 1:    # A record (IPv4)
             ipv4 = socket.inet_ntop(socket.AF_INET, rdata)
-            print(f'{name} has IPv4 address {ipv4}')\
+            print(f'{name} has IPv4 address {ipv4}')
             return ipv4
-        elif type == ?????: # Lookup Type value
-            # AAAA record (IPv6 address)
+        elif type == 28: # AAAA record (IPv6)
             ipv6 = socket.inet_ntop(socket.AF_INET6, rdata)
             print(f'{name} has IPv6 address {ipv6}')
-            return ipv6                
+            return ipv6
 
 def parse_name(data, offset):
     name_parts = []
@@ -176,7 +176,7 @@ def parse_name(data, offset):
             break
         else:
             # Label
-            label = data[offset:offset+length].decode('ascii') # HINT
+            label = data[offset:offset+length].decode('ascii')
             offset += length
             name_parts.append(label)
     return '.'.join(name_parts)
@@ -189,3 +189,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     result = dns_query(args.type, args.name, args.server)
+
